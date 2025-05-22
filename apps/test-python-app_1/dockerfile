@@ -22,7 +22,7 @@ EXPOSE 5000
 # Define environment variable for Flask (optional, can be set in app.py too)
 ENV FLASK_APP=app.py
 ENV FLASK_RUN_HOST=0.0.0.0
-ENV FLASK_ENV=production # Set to production for real deployments (disables debug mode)
+ENV FLASK_ENV=production
 
 # Command to run the application using Flask's built-in server
 # For production, you would typically use a WSGI server like Gunicorn:
