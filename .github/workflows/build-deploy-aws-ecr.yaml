@@ -1,0 +1,62 @@
+name: Build and Push test-python-app_1 to ECR
+
+on:
+  push:
+    branches: [ main ] # Triggers only on pushes to the main branch
+    paths: # Only run if files in test-python-app_1 change (optimization)
+      - 'test-python-app_1/**'
+
+env:
+  AWS_REGION: ap-southeast-1
+  ECR_REPOSITORY_NAME: test-python-app_1 # The name of your ECR repository for this service
+  MICROSERVICE_PATH: test-python-app_1 # Path to the microservice directory
+
+jobs:
+  build-and-push:
+    name: Build and Push ${{ env.MICROSERVICE_PATH }} Image
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4
+
+    - name: Configure AWS Credentials using OIDC
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ secrets.AWS_ECR_ACCESS_ROLE }} 
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+
+    - name: Build, tag, and push image to Amazon ECR
+      id: build-image
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        IMAGE_TAG: ${{ github.sha }} # Use the commit SHA as the image tag for uniqueness
+      run: |
+        echo "Building image for path: ./${{ env.MICROSERVICE_PATH }}"
+        echo "ECR Registry: $ECR_REGISTRY"
+        echo "ECR Repository Name: ${{ env.ECR_REPOSITORY_NAME }}"
+        echo "Image Tag: $IMAGE_TAG"
+
+        docker build -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY_NAME }}:$IMAGE_TAG -f ./${{ env.MICROSERVICE_PATH }}/Dockerfile ./${{ env.MICROSERVICE_PATH }}
+        
+        echo "Pushing image: $ECR_REGISTRY/${{ env.ECR_REPOSITORY_NAME }}:$IMAGE_TAG"
+        docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY_NAME }}:$IMAGE_TAG
+        
+        # You might also want a 'latest' tag for the main branch
+        if [[ "${{ github.ref_name }}" == "main" ]]; then
+          echo "Tagging image as latest"
+          docker tag $ECR_REGISTRY/${{ env.ECR_REPOSITORY_NAME }}:$IMAGE_TAG $ECR_REGISTRY/${{ env.ECR_REPOSITORY_NAME }}:latest
+          echo "Pushing image: $ECR_REGISTRY/${{ env.ECR_REPOSITORY_NAME }}:latest"
+          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY_NAME }}:latest
+        fi
+
+    - name: Output image details
+      run: |
+        echo "Image pushed: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY_NAME }}:${{ github.sha }}"
+        if [[ "${{ github.ref_name }}" == "main" ]]; then
+          echo "Also pushed as: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY_NAME }}:latest"
+        fi
