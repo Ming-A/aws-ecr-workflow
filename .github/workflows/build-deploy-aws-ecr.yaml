@@ -4,12 +4,12 @@ on:
   push:
     branches: [ main ] # Triggers only on pushes to the main branch
     paths: # Only run if files in test-python-app_1 change (optimization)
-      - 'test-python-app_1/**'
+      - 'apps/**'
 
 env:
   AWS_REGION: ap-southeast-1
   ECR_REPOSITORY_NAME: test-python-app_1 # The name of your ECR repository for this service
-  MICROSERVICE_PATH: test-python-app_1 # Path to the microservice directory
+  MICROSERVICE_PATH: apps/test-python-app_1 # Path to the microservice directory
 
 jobs:
   build-and-push:
