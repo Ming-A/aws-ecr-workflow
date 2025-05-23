@@ -10,6 +10,6 @@ resource "aws_ecr_repository" "app_ecr_repo" {
     tags = {
         Enviroment = "Dev"
         ManagedBy = "Terraform"
-        Project = "ProjectA"
+        Project = "aws-ecr-workflow-github"
     }
 }
