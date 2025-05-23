@@ -1,48 +1,108 @@
-name: Build and Push apps to ECR (trial with test-python-app_1)
+name: CI/CD for Microservices
 
 on:
   push:
     branches:
-      - main # Only triggers on pushes to the main branch
-    paths:
-      - 'apps/test-python-app_1/**'
+      - main
 
 env:
   AWS_REGION: ap-southeast-1
-  ECR_REPOSITORY_NAME: test-python-app_1
-  MICROSERVICE_PATH: apps/test-python-app_1
-  PYTHON_VERSION: '3.9' 
 
 jobs:
-  build-test-and-push:
-    name: Build, Test, and Push test-python-app_1 Image
+  detect-changes:
+    name: Detect Changed Services
     runs-on: ubuntu-latest
-    
+    outputs:
+      # Will output a JSON string array of changed services, e.g., '["test-python-app_1", "test-nodejs-app_1"]'
+      services_to_build: ${{ steps.filter.outputs.changes }}
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Detect changed service paths
+        id: filter
+        uses: dorny/paths-filter@v3.0.2
+        with:
+          filters: |
+            test-python-app_1: # Key used in matrix strategy
+              - 'apps/test-python-app_1/**'
+
+            test-nodejs-app_1: # Key used in matrix strategy
+              - 'apps/test-nodejs-app_1/**'
+
+  build-test-and-push:
+    name: Build, Test & Push - ${{ matrix.service_name }}
+    needs: detect-changes # This job depends on the output of detect-changes
+    # Only run if the detect-changes job found services to build
+    if: ${{ needs.detect-changes.outputs.services_to_build != '[]' && needs.detect-changes.outputs.services_to_build != '' }}
+    runs-on: ubuntu-latest
     permissions:
-      id-token: write
-      contents: read
+      id-token: write # For OIDC
+      contents: read  # For checkout
+
+    strategy:
+      fail-fast: false # If one service build fails, others can continue
+      matrix:
+        # Create a job for each service identified by the detect-changes job
+        service_name: ${{ fromJson(needs.detect-changes.outputs.services_to_build) }}
+        # You can define service-specific configurations here if needed
+        include:
+          - service_name: test-python-app_1
+            microservice_path: apps/test-python-app_1
+            ecr_repo_name: test-python-app_1
+            language: python
+            python_version: '3.9'
+          - service_name: test-nodejs-app_1
+            microservice_path: apps/test-nodejs-app_1
+            ecr_repo_name: test-nodejs-app_1
+            language: nodejs
+            node_version: '18'
 
     steps:
     - name: Check out code
       uses: actions/checkout@v4
 
-    - name: Set up Python
+    # --- Language Specific Setup ---
+    - name: Set up Python for ${{ matrix.service_name }}
+      if: matrix.language == 'python'
       uses: actions/setup-python@v5
       with:
-        python-version: ${{ env.PYTHON_VERSION }}
+        python-version: ${{ matrix.python_version }}
 
-    - name: Install Python dependencies for test-python-app_1
-      working-directory: ./${{ env.MICROSERVICE_PATH }} # Run this step inside the test-python-app_1 directory
+    - name: Set up Node.js for ${{ matrix.service_name }}
+      if: matrix.language == 'nodejs'
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ matrix.node_version }}
+        cache: 'npm' # Optional: Cache npm dependencies
+        cache-dependency-path: ${{ matrix.microservice_path }}/package-lock.json
+
+    # --- Dependency Installation ---
+    - name: Install Python dependencies for ${{ matrix.service_name }}
+      if: matrix.language == 'python'
+      working-directory: ./${{ matrix.microservice_path }}
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt 
+        pip install -r requirements.txt
 
-    - name: Run unit tests for test-python-app_1
-      working-directory: ./${{ env.MICROSERVICE_PATH }} # Run this step inside the test-python-app_1 directory
-      run: |
-        pytest 
+    - name: Install Node.js dependencies for ${{ matrix.service_name }}
+      if: matrix.language == 'nodejs'
+      working-directory: ./${{ matrix.microservice_path }}
+      run: npm ci # Use 'ci' for cleaner installs with lockfile
 
-    - name: Configure AWS Credentials using OIDC
+    # --- Unit Testing ---
+    - name: Run Python unit tests for ${{ matrix.service_name }}
+      if: matrix.language == 'python'
+      working-directory: ./${{ matrix.microservice_path }}
+      run: pytest
+
+    - name: Run Node.js unit tests for ${{ matrix.service_name }}
+      if: matrix.language == 'nodejs'
+      working-directory: ./${{ matrix.microservice_path }}
+      run: npm test
+
+    # --- AWS and ECR Steps ---
+    - name: Configure AWS Credentials
       uses: aws-actions/configure-aws-credentials@v4
       with:
         role-to-assume: ${{ secrets.AWS_ECR_ACCESS_ROLE }}
@@ -52,21 +112,24 @@ jobs:
       id: login-ecr
       uses: aws-actions/amazon-ecr-login@v2
 
-    - name: Build, tag, and push image to Amazon ECR
+    - name: Build, tag, and push image for ${{ matrix.service_name }}
       env:
         ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-        IMAGE_TAG: latest
+        # ECR_REPOSITORY_NAME from matrix
+        IMAGE_TAG: latest # Simple 'latest' tag for now
       run: |
-        echo "Building image from path: ./${{ env.MICROSERVICE_PATH }}"
-        echo "Tagging as: $ECR_REGISTRY/${{ env.ECR_REPOSITORY_NAME }}:$IMAGE_TAG"
+        echo "Building image for service: ${{ matrix.service_name }}"
+        echo "Path: ./${{ matrix.microservice_path }}"
+        echo "ECR Repo Name: ${{ matrix.ecr_repo_name }}"
+        echo "Tagging as: $ECR_REGISTRY/${{ matrix.ecr_repo_name }}:$IMAGE_TAG"
 
-        docker build -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY_NAME }}:$IMAGE_TAG \
-                     -f ./${{ env.MICROSERVICE_PATH }}/Dockerfile \
-                     ./${{ env.MICROSERVICE_PATH }}
+        docker build -t $ECR_REGISTRY/${{ matrix.ecr_repo_name }}:$IMAGE_TAG \
+                     -f ./${{ matrix.microservice_path }}/Dockerfile \
+                     ./${{ matrix.microservice_path }}
         
-        echo "Pushing image: $ECR_REGISTRY/${{ env.ECR_REPOSITORY_NAME }}:$IMAGE_TAG"
-        docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY_NAME }}:$IMAGE_TAG
+        echo "Pushing image: $ECR_REGISTRY/${{ matrix.ecr_repo_name }}:$IMAGE_TAG"
+        docker push $ECR_REGISTRY/${{ matrix.ecr_repo_name }}:$IMAGE_TAG
 
-    - name: Output pushed image details
+    - name: Output pushed image details for ${{ matrix.service_name }}
       run: |
-        echo "Image pushed: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY_NAME }}:latest"
+        echo "Image pushed: ${{ steps.login-ecr.outputs.registry }}/${{ matrix.ecr_repo_name }}:latest"
